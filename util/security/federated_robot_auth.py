@@ -1,4 +1,3 @@
-import json
 import logging
 from functools import lru_cache
 
@@ -10,10 +9,9 @@ from auth import scopes
 from auth.basic import _parse_basic_auth_header
 from auth.log import log_action
 from auth.validateresult import AuthKind, ValidateResult
-from data.database import FederatedLogin
 from data.model import InvalidRobotCredentialException
 from data.model.api_token import normalize_scope, validate_api_scope_string
-from data.model.user import lookup_robot
+from data.model.user import ensure_robot_federation_ids, lookup_robot
 from oauth.login_utils import get_jwt_issuer
 from oauth.oidc import OIDCLoginService
 from util.names import parse_robot_username
@@ -113,22 +111,13 @@ def resolve_federation_scope(binding, requested_scope):
 
 def verify_federated_robot_jwt_token(robot, token):
     # The token is a JWT token from the external OIDC provider
-    # We always have an entry in the federatedlogin table for each robot account
-    federated_robot = FederatedLogin.select().where(FederatedLogin.user == robot).get()
-    assert federated_robot
-
-    try:
-        metadata = json.loads(federated_robot.metadata_json)
-    except Exception as e:
-        logger.debug("Error parsing federated login metadata: %s", e)
-        raise InvalidRobotCredentialException("Robot does not have federated login configured")
-
-    # check if robot has federated login config
     token_issuer = get_jwt_issuer(token)
     if not token_issuer:
         raise InvalidRobotCredentialException("Token does not contain issuer")
 
-    fed_config = metadata.get("federation_config", [])
+    # Read the stored bindings through the shared normalizing reader so a legacy
+    # binding without id/version never reaches validation, minting or logging.
+    fed_config = ensure_robot_federation_ids(robot)
     if not fed_config:
         raise InvalidRobotCredentialException("Robot does not have federated login configured")
 
